@@ -1,7 +1,7 @@
 import re
 from urllib.parse import urlparse
 
-def scraper(url, resp):
+def scraper (url: str, resp: utils.response.Response): -> list
     links = extract_next_links(url, resp)
     return [link for link in links if is_valid(link)]
 
