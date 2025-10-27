@@ -1,9 +1,11 @@
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urldefrag, urljoin
+from bs4 import BeautifulSoup
 
 def scraper(url, resp):
     links = extract_next_links(url, resp)
     return [link for link in links if is_valid(link)]
+
 
 def extract_next_links(url, resp):
     # Implementation required.
@@ -15,7 +17,49 @@ def extract_next_links(url, resp):
     #         resp.raw_response.url: the url, again
     #         resp.raw_response.content: the content of the page!
     # Return a list with the hyperlinks (as strings) scrapped from resp.raw_response.content
-    return list()
+
+    # ---  DEBUG ---
+    print(url,resp.url,resp.status,resp.error,resp.raw_response.url)
+    # --------------
+
+    if resp is None:
+        return []
+    if resp.status != 200:
+        return []
+
+    try: 
+        soup = BeautifulSoup(resp.raw_response.content, 'lxml')
+    except Exception as error_details:
+        print(f"*** {error_details} ***")
+        return []
+
+    links = set()
+
+    # Finds all the link tags with the href attribute in the HTML
+    # Only gets real links and ignores links to emails, and others
+    all_page_link_tags = soup.find_all('a', href=True)      
+
+    # Goes through the list of anchor tags found 
+    for tag in all_page_link_tags:
+        # Extracts the string text from the tag 
+        link_string = tag.get('href')    
+
+        # Makes sure not empty before manipulating URL string
+        if link_string:           
+            # Removes the part after # in the URL
+            # Holds a tuple (0 = URL without fragment, 1 = the fragment part #....)
+            link_defragmented = urldefrag(link_string)[0]
+            # Converts the URL from relative path to absolute 
+            absolute_path = urljoin(resp.url,link_defragmented)
+            links.add(absolute_path)
+            
+# -------- debugging --------
+    for i in links:
+        print(i)
+    print(len(links))
+    #exit()
+ # --------------------------
+    return list(links)
 
 def is_valid(url):
     # Decide whether to crawl this url or not. 
