@@ -57,10 +57,10 @@ def is_valid(url):
         # stat.uci.edu
         # in its netloc. If it does, it stores that bool in the in_domains variable.
         in_domains = bool(re.match(
-            r"(.*ics.uci.edu.*|"
-            + r".*cs.uci.edu.*|"
-            + r".*informatics.uci.edu.*|"
-            + r".*stat.uci.edu.*)", parsed.netloc.lower()))
+            r"(.*.ics.uci.edu.*|"
+            + r".*.cs.uci.edu.*|"
+            + r".*.informatics.uci.edu.*|"
+            + r".*.stat.uci.edu.*)", parsed.netloc.lower()))
 
         return in_domains
 
