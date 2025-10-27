@@ -26,7 +26,15 @@ def is_valid(url):
         if parsed.scheme not in set(["http", "https"]):
             return False
         # re.match() only checks for a match at the beginning of the string.
-        return not re.match(
+        
+        # Welcome to comments with Natham! I love writing comments wahoo
+
+        # In the original is_valid function, this bool was just returned.
+        # However, we'll instead be storing its value in an actual_page variable.
+        # actual_page is False if the URL path ends with one of the following file extensions.
+        # We don't want it to have any of these file extensions, so we'll require actual_page
+        # to be True in order to return True in the end.
+        actual_page = not re.match(
             r".*\.(css|js|bmp|gif|jpe?g|ico"
             + r"|png|tiff?|mid|mp2|mp3|mp4"
             + r"|wav|avi|mov|mpeg|ram|m4v|mkv|ogg|ogv|pdf"
@@ -35,6 +43,15 @@ def is_valid(url):
             + r"|epub|dll|cnf|tgz|sha1"
             + r"|thmx|mso|arff|rtf|jar|csv"
             + r"|rm|smil|wmv|swf|wma|zip|rar|gz)$", parsed.path.lower())
+        
+        # This code would probably be faster and used less memory if we just had an if-statement that
+        # returned False if the above bool was False, and kept going otherwise. However, I prefer to
+        # keep track of these kinds of things in nicely-named variables, memory be darned!
+        if not actual_page:
+            return False
+        
+
+
 
     except TypeError:
         print ("TypeError for ", parsed)
