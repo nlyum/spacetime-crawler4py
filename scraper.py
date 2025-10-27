@@ -1,7 +1,7 @@
 import re
 from urllib.parse import urlparse
 
-def scraper (url: str, resp: utils.response.Response): -> list
+def scraper (url: str, resp: utils.response.Response): -> list      # maybe i should change this line back to how it was b4
     links = extract_next_links(url, resp)
     return [link for link in links if is_valid(link)]
 
@@ -44,13 +44,25 @@ def is_valid(url):
             + r"|thmx|mso|arff|rtf|jar|csv"
             + r"|rm|smil|wmv|swf|wma|zip|rar|gz)$", parsed.path.lower())
         
-        # This code would probably be faster and used less memory if we just had an if-statement that
+        # This code would probably be faster and use less memory if we just had an if-statement that
         # returned False if the above bool was False, and kept going otherwise. However, I prefer to
         # keep track of these kinds of things in nicely-named variables, memory be darned!
         if not actual_page:
             return False
         
+        # This code checks if the parsed URL has one of the four following:
+        # ics.uci.edu
+        # cs.uci.edu
+        # informatics.uci.edu
+        # stat.uci.edu
+        # in its netloc. If it does, it stores that bool in the in_domains variable.
+        in_domains = bool(re.match(
+            r"(.*ics.uci.edu.*|"
+            + r".*cs.uci.edu.*|"
+            + r".*informatics.uci.edu.*|"
+            + r".*stat.uci.edu.*)", parsed.netloc.lower()))
 
+        return in_domains
 
 
     except TypeError:
