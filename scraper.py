@@ -1,5 +1,6 @@
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urldefrag, urljoin, urlunparse
+from bs4 import BeautifulSoup
 
 def scraper(url, resp):
     links = extract_next_links(url, resp)
@@ -15,23 +16,96 @@ def extract_next_links(url, resp):
     #         resp.raw_response.url: the url, again
     #         resp.raw_response.content: the content of the page!
     # Return a list with the hyperlinks (as strings) scrapped from resp.raw_response.content
+    # ---  DEBUG ---
+    print("URL and resp", url,resp.url,resp.status,resp.error,resp.raw_response.url)
+    # --------------
+
     if resp is None:
         return []
     if resp.status != 200:
         return []
+
+    try: 
+        soup = BeautifulSoup(resp.raw_response.content, 'lxml')
+    except Exception as error_details:
+        print(f"*** {error_details} ***")
+        return []
+
     links = set()
+
+    # Finds all the link tags with the href attribute in the HTML
+    # Only gets real links and ignores links to emails, and others
+    all_page_link_tags = soup.find_all('a', href=True)      
+
+    # Goes through the list of anchor tags found 
+    for tag in all_page_link_tags:
+        # Extracts the string text from the tag 
+        link_string = tag.get('href')    
+
+        # Makes sure not empty before manipulating URL string
+        if link_string:           
+            # Removes the part after # in the URL
+            # Holds a tuple (0 = URL without fragment, 1 = the fragment part #....)
+            link_defragmented = urldefrag(link_string)[0]
+            # Converts the URL from relative path to absolute 
+            absolute_path = urljoin(resp.url,link_defragmented)
+            links.add(absolute_path)
+            
+# -------- debugging --------
+    for i in links:
+        print(i)
+    print(len(links))
+    #exit()
+ # --------------------------
     return list(links)
+
+#global set for already seen url
+SEEN = set()
+ALLOWED_DOMAIN = ("ics.uci.edu", "cs.uci.edu", "informatics.uci.edu", "stat.uci.edu")
+# checking if the domain in the acceptable range
+def domain_range(host: str) -> bool:
+    if not host:
+        return False
+    host = host.lower().rstrip(".")
+    
+    for d in ALLOWED_DOMAIN:
+        #if any domain or subdomain match return true
+        if host == d or host.endswith("." + d):
+            return True
+    return False
+
+def canonicalize_trailing_slash(u: str) -> str:
+    p = urlparse(u)
+    path = p.path or "/"
+    if path != "/" and path.endswith("/"):
+        #remove the trailing slash
+        path = path[:-1]
+    p = p._replace(path=path)
+    return urlunparse(p)
 
 def is_valid(url):
     # Decide whether to crawl this url or not. 
     # If you decide to crawl it, return True; otherwise return False.
     # There are already some conditions that return False.
+    print("debugfor url: ", url)
+
+    #Canonicalize the url by removing the trailing slash
+    # to make links https://ics.uci.edu/accessibility-statement/
+    # and https://ics.uci.edu/accessibility-statement become the same link
+    url = canonicalize_trailing_slash(url)
     try:
         parsed = urlparse(url)
+        print("debug ......")
+        print("parsed usl: ", parsed)
         if parsed.scheme not in set(["http", "https"]):
             return False
+        
+        #If the domain is not in the acceptable range, return false
+        if not domain_range(parsed.netloc):
+            return False
+        
         # re.match() only checks for a match at the beginning of the string.
-        return not re.match(
+        if re.match(
             r".*\.(css|js|bmp|gif|jpe?g|ico"
             + r"|png|tiff?|mid|mp2|mp3|mp4"
             + r"|wav|avi|mov|mpeg|ram|m4v|mkv|ogg|ogv|pdf"
@@ -39,8 +113,19 @@ def is_valid(url):
             + r"|data|dat|exe|bz2|tar|msi|bin|7z|psd|dmg|iso"
             + r"|epub|dll|cnf|tgz|sha1"
             + r"|thmx|mso|arff|rtf|jar|csv"
-            + r"|rm|smil|wmv|swf|wma|zip|rar|gz)$", parsed.path.lower())
+            + r"|docs"
+            + r"|rm|smil|wmv|swf|wma|zip|rar|gz)$", parsed.path.lower()):
+            return False
+        
+        # exclude the url that end with "ical=1" which is calendar
+        if parsed.query.lower() == "ical=1":
+            return False
+        if url in SEEN:
+            return False
+        else:
+            SEEN.add(url)
+        return True
 
     except TypeError:
-        print ("TypeError for ", parsed)
+        print ("TypeError for ", url)
         raise
