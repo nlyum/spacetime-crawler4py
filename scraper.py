@@ -19,7 +19,7 @@ def extract_next_links(url, resp):
     # Return a list with the hyperlinks (as strings) scrapped from resp.raw_response.content
 
     # ---  DEBUG ---
-    print(url,resp.url,resp.status,resp.error,resp.raw_response.url)
+    # print(url,resp.url,resp.status,resp.error,resp.raw_response.url)
     # --------------
 
     if resp is None:
@@ -44,6 +44,7 @@ def extract_next_links(url, resp):
         # Extracts the string text from the tag 
         link_string = tag.get('href')    
 
+        # 
         # Makes sure not empty before manipulating URL string
         if link_string:           
             # Removes the part after # in the URL
@@ -54,6 +55,7 @@ def extract_next_links(url, resp):
             links.add(absolute_path)
             
 # -------- debugging --------
+    print(f"\n----- Links found in {resp.raw_response.url}: \n")
     for i in links:
         print(i)
     print(len(links))
@@ -82,3 +84,13 @@ def is_valid(url):
     except TypeError:
         print ("TypeError for ", parsed)
         raise
+        # ---- Defragment ----
+        # ---- Check if within UCI domain and paths ----
+        """ 
+        Hint:   Use parsed = urlparse(url). The domain is parsed.netloc. 
+                You need to check if parsed.netloc ends with (.endswith()) .ics.uci.edu,
+                .cs.uci.edu, etc. AND also check for exact matches (like ics.uci.edu).
+        """
+
+        # File type filtering exclued files not of interest
+
