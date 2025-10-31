@@ -15,6 +15,8 @@ session_tracker = defaultdict(set)  # Track session-like parameters
 domain_last_crawl = defaultdict(float)  # Track last crawl time per domain
 page_content_hashes = defaultdict(int)  # Track content similarity
 url_visit_count = defaultdict(int)  # Track URL visit frequency
+stop_words = set()   # Used for finding most frequent words
+word_counter = Counter()    # Tracks word frequency across all pages
 
 def get_allowed_domains():
     """
@@ -326,6 +328,64 @@ def track_url_pattern(url):
     except Exception as e:
         print(f"Error tracking URL pattern for {url}: {e}")
 
+def load_stopwords(filename="stopwords.txt"):
+    """
+    Load stopwords from stored file
+    Used for : 50 most common words
+    """
+    stopwords = set()
+    try:
+        with open(filename, "r", encoding="utf-8") as f:
+            for line in f:
+                word = line.strip().lower()
+                if word:
+                    stopwords.add(word)
+    except FileNotFoundError:
+        print(f"Warning: stopwords file '{filename}' not found.")
+    return stopwords
+
+def count_page_words_frequency(resp):
+    """
+    Extracts words from the passed URL and stores in word counter
+    Ignores stopwords, HTML markup and only counts letters [a-z] 
+    to be considerred a word
+    """
+    global stop_words
+    stop_words = load_stopwords()
+    try:
+        soup = BeautifulSoup(resp.raw_response.content, "html.parser")
+
+        # Removes unnecessary tags 
+        for tag in soup(["script", "style", "nav", "header", "footer"]):
+            tag.decompose()
+        # Gets only the readable text
+        text = soup.get_text(separator=" ")
+        text = text.lower()
+
+        # filters out # or symbols, only letters a-z
+        words = re.findall(r"[a-z]+", text)
+
+        # goes through found words and if not a stop word adds it to global counter with +1 to its frequency
+        for word in words:
+            if word not in stop_words:
+                word_counter[word] += 1
+
+    except Exception as e:
+        print(f"Error counting words: {e}")
+
+def save_top_words_to_file(filename="top_words.txt", n=50):
+    """
+    Save the n most common words to text file.
+    """
+    try:
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(f"Top {n} Most Common Words (excluding stopwords)\n")
+            f.write("=" * 50 + "\n")
+            for word, count in word_counter.most_common(n):
+                f.write(f"{word:<20} {count}\n")
+    except Exception as e:
+        print(f"Error saving top words: {e}")
+
 def scraper(url, resp):
     """
     Main scraper function with comprehensive trap detection and content analysis
@@ -360,10 +420,12 @@ def scraper(url, resp):
         if is_similar_page_with_no_info(url, content):
             print(f" Similar page with no info detected: {url}")
             return []
-        
         # Track URL pattern for trap detection
         track_url_pattern(url)
         
+        # Tracks frequency of words 
+        count_page_words_frequency(resp)
+
         # Extract links from the page
         links = extract_next_links(url, resp)
         valid_links = []
@@ -560,6 +622,7 @@ def save_crawl_results():
     print("\n Saving crawl results to files...")
     save_all_urls_to_file()
     save_unique_urls_to_file()
+    save_top_words_to_file("top_words.txt", 50)
     print(" Crawl results saved successfully!")
 
 def reset_all_tracking():
