@@ -466,7 +466,8 @@ def extract_next_links(url, resp):
     #         resp.raw_response.content: the content of the page!
     # Return a list with the hyperlinks (as strings) scrapped from resp.raw_response.content
     links = []
-    
+    save_top_words_to_file("top_words.txt", 50)
+
     # Check if response is valid
     if resp.status != 200 or resp.raw_response is None or resp.raw_response.content is None:
         return links
