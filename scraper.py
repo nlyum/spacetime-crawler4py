@@ -1,31 +1,61 @@
+"""
+Web Crawler Scraper
+Main scraper module with comprehensive trap detection and report generation
+"""
+
 import re
-import time
-import hashlib
+import json
 from urllib.parse import urlparse, urljoin, urldefrag, parse_qs
 from bs4 import BeautifulSoup
 import configparser
 from collections import defaultdict, Counter
 
-# Global tracking for crawler trap detection and politeness
-crawled_urls = []
-url_patterns = defaultdict(int)  # Track URL patterns
-query_params = defaultdict(int)  # Track query parameters
-path_depth = defaultdict(int)    # Track path depths
-session_tracker = defaultdict(set)  # Track session-like parameters
-domain_last_crawl = defaultdict(float)  # Track last crawl time per domain
-page_content_hashes = defaultdict(int)  # Track content similarity
-url_visit_count = defaultdict(int)  # Track URL visit frequency
+# ============================================================================
+# GLOBAL STATE FOR REPORT TRACKING
+# ============================================================================
+
+unique_urls = set()  # Unique URLs crawled
+url_to_word_count = {}  # Word count per URL
+all_words = []  # All words from all pages for frequency analysis
+longest_page_url = ""
+longest_page_count = 0
+subdomain_urls = defaultdict(set)  # Store unique URLs per subdomain
+
+# Similarity detection tracking
+url_to_word_vector = {}  # Store word vectors (TF-IDF) per URL
+document_frequencies = defaultdict(int)  # Track how many docs contain each word
+total_documents = 0
+exact_content_hashes = set()  # Store exact content hashes for duplicate detection
+
+# Stopwords for filtering
+STOPWORDS = {
+    'the', 'be', 'to', 'of', 'and', 'a', 'in', 'that', 'have', 'i',
+    'it', 'for', 'not', 'on', 'with', 'he', 'as', 'you', 'do', 'at',
+    'this', 'but', 'his', 'by', 'from', 'they', 'we', 'say', 'her', 'she',
+    'or', 'an', 'will', 'my', 'one', 'all', 'would', 'there', 'their',
+    'what', 'so', 'up', 'out', 'if', 'about', 'who', 'get', 'which', 'go',
+    'me', 'when', 'make', 'can', 'like', 'time', 'no', 'just', 'him', 'know',
+    'take', 'people', 'into', 'year', 'your', 'good', 'some', 'could', 'them',
+    'see', 'other', 'than', 'then', 'now', 'look', 'only', 'come', 'its', 'over',
+    'think', 'also', 'back', 'after', 'use', 'two', 'how', 'our', 'work', 'first',
+    'well', 'way', 'even', 'new', 'want', 'because', 'any', 'these', 'give', 'day',
+    'most', 'us', 'are', 'had', 'been', 'were', 'being', 'have', 'has', 'had'
+}
+
+# ============================================================================
+# CONFIGURATION FUNCTIONS
+# ============================================================================
 
 def get_allowed_domains():
     """
-    Load allowed domains from config.ini file (cached)
+    Load allowed domains from config.ini file
     """
     config = configparser.ConfigParser()
     config.read('config.ini')
-        
+    
     # Get seed URLs from config
     seed_urls = config["CRAWLER"]["SEEDURL"].split(",")
-        
+    
     # Extract base domains from seed URLs (remove www. prefix for subdomain matching)
     allowed_domains = []
     for url in seed_urls:
@@ -39,43 +69,12 @@ def get_allowed_domains():
                     domain = domain[4:]  # Remove 'www.'
                 if domain and domain not in allowed_domains:
                     allowed_domains.append(domain)
-        
+    
     return allowed_domains
 
-def get_politeness_delay():
-    """
-    Get politeness delay from config.ini
-    """
-    try:
-        config = configparser.ConfigParser()
-        config.read('config.ini')
-        return float(config["CRAWLER"]["POLITENESS"])
-    except Exception as e:
-        print(f" Error loading politeness delay, using default 1.0s: {e}")
-        return 1.0
-
-def check_politeness_delay(url):
-    """
-    Check if enough time has passed since last crawl of this domain
-    """
-    try:
-        parsed = urlparse(url)
-        domain = parsed.netloc.lower()
-        current_time = time.time()
-        delay = get_politeness_delay()
-        
-        if domain in domain_last_crawl:
-            time_since_last = current_time - domain_last_crawl[domain]
-            if time_since_last < delay:
-                wait_time = delay - time_since_last
-                print(f" Politeness delay: waiting {wait_time:.2f}s for {domain}")
-                time.sleep(wait_time)
-        
-        domain_last_crawl[domain] = time.time()
-        return True
-    except Exception as e:
-        print(f" Error checking politeness delay: {e}")
-        return False
+# ============================================================================
+# TRAP DETECTION FUNCTIONS
+# ============================================================================
 
 def is_infinite_trap(url):
     """
@@ -143,50 +142,14 @@ def is_infinite_trap(url):
         print(f"Error checking infinite trap for {url}: {e}")
         return False
 
-def is_similar_page_with_no_info(url, content):
-    """
-    Detect pages with similar content but no useful information
-    """
-    try:
-        if not content:
-            return True
-        
-        # Create content hash for similarity detection
-        soup = BeautifulSoup(content, "html.parser")
-        
-        # Remove script and style elements
-        for script in soup(["script", "style"]):
-            script.decompose()
-        
-        # Get text content
-        text_content = soup.get_text()
-        
-        # Check for very little text content
-        if len(text_content.strip()) < 100:  # Less than 100 characters
-            return True
-        
-        # Check for mostly navigation/boilerplate content
-        nav_keywords = ['navigation', 'menu', 'sidebar', 'footer', 'header', 'breadcrumb']
-        nav_count = sum(1 for keyword in nav_keywords if keyword in text_content.lower())
-        
-        if nav_count > 3 and len(text_content) < 500:  # Mostly navigation
-            return True
-        
-        # Create hash of content for similarity detection
-        content_hash = hashlib.md5(text_content.encode()).hexdigest()
-        page_content_hashes[content_hash] += 1
-        
-        # If we've seen this exact content more than 3 times, it's likely a template
-        if page_content_hashes[content_hash] > 3:
-            return True
-        
-        return False
-        
-    except Exception as e:
-        print(f"Error checking similar page for {url}: {e}")
-        return True
-""" 
+# ============================================================================
+# CONTENT QUALITY DETECTION FUNCTIONS
+# ============================================================================
+
 def is_dead_url(resp):
+    """
+    Detect dead URLs that return 200 but no useful data
+    """
     try:
         if resp.status != 200:
             return True
@@ -215,7 +178,7 @@ def is_dead_url(resp):
     except Exception as e:
         print(f"Error checking dead URL: {e}")
         return True
- """
+
 def is_large_file_with_low_value(url, content):
     """
     Detect very large files with low information value
@@ -258,6 +221,7 @@ def is_large_file_with_low_value(url, content):
 def has_high_textual_content(content):
     """
     Check if page has high textual information content
+    Combines low info detection and high quality checks
     """
     try:
         if not content:
@@ -265,30 +229,25 @@ def has_high_textual_content(content):
         
         soup = BeautifulSoup(content, "html.parser")
         
-        # Remove script and style elements
+        # Remove non-content elements
         for script in soup(["script", "style", "nav", "header", "footer"]):
             script.decompose()
         
         # Get text content
         text_content = soup.get_text()
         
-        # Check for minimum text content (at least 200 characters)
+        # Check for minimum text content (< 200 chars is low info)
         if len(text_content.strip()) < 200:
             return False
         
-        # Check for meaningful content indicators
-        content_indicators = [
-            'article', 'main', 'content', 'text', 'paragraph', 'section'
-        ]
+        # Simple word count check (words of 3+ characters)
+        words = re.findall(r'\b[a-zA-Z]{3,}\b', text_content.lower())
+        if len(words) < 100:  # Need at least 100 words
+            return False
         
         # Look for content-rich elements
         content_elements = soup.find_all(['article', 'main', 'div', 'section', 'p'])
         if len(content_elements) < 3:  # Need at least some structure
-            return False
-        
-        # Check for reasonable text density
-        total_text = len(text_content)
-        if total_text < 500:  # At least 500 characters of text
             return False
         
         return True
@@ -297,51 +256,309 @@ def has_high_textual_content(content):
         print(f"Error checking textual content: {e}")
         return False
 
-def track_url_pattern(url):
+# ============================================================================
+# TEXT PROCESSING FUNCTIONS
+# ============================================================================
+
+def extract_words_from_text(text):
     """
-    Track URL patterns for trap detection
+    Extract words from text, filtering stopwords
     """
+    words = re.findall(r'\b[a-zA-Z]{3,}\b', text.lower())
+    return [w for w in words if w not in STOPWORDS]
+
+# ============================================================================
+# SIMILARITY DETECTION FUNCTIONS (FROM SCRATCH - NO LIBRARIES)
+# ============================================================================
+
+def cosine_similarity(vec1, vec2):
+    """
+    Compute cosine similarity between two vectors
+    cosine = (A · B) / (||A|| * ||B||)
+    
+    Implemented from scratch without any libraries (pure Python math)
+    """
+    # Get dot product (A · B)
+    dot_product = 0.0
+    for word in vec1:
+        if word in vec2:
+            dot_product += vec1[word] * vec2[word]
+    
+    # Compute magnitudes ||A|| and ||B||
+    magnitude1 = sum(val ** 2 for val in vec1.values()) ** 0.5
+    magnitude2 = sum(val ** 2 for val in vec2.values()) ** 0.5
+    
+    # Avoid division by zero
+    if magnitude1 == 0 or magnitude2 == 0:
+        return 0.0
+    
+    # Cosine similarity
+    return dot_product / (magnitude1 * magnitude2)
+
+def check_exact_similarity(content):
+    """
+    Check for exact duplicate content using hash
+    
+    Methodology:
+    1. Extract text content from HTML
+    2. Remove HTML markup, scripts, styles, navigation
+    3. Create hash of the cleaned text
+    4. Compare with previously seen hashes
+    
+    Returns True if exact duplicate found
+    """
+    global exact_content_hashes
+    
     try:
-        parsed = urlparse(url)
+        soup = BeautifulSoup(content, "html.parser")
         
-        # Create a pattern by normalizing the URL
-        pattern = f"{parsed.netloc}{parsed.path}"
-        # Remove numbers and replace with placeholder
-        pattern = re.sub(r'\d+', 'N', pattern)
+        # Remove all non-content elements
+        for script in soup(["script", "style", "nav", "header", "footer", "iframe", "noscript"]):
+            script.decompose()
         
-        url_patterns[pattern] += 1
+        # Get clean text content
+        text_content = soup.get_text().strip().lower()
         
-        # Track query parameters
-        query_params_list = parse_qs(parsed.query)
-        for param in query_params_list.keys():
-            query_params[param] += 1
+        # Create hash of the text
+        content_hash = hash(text_content)
         
-        # Track path depth
-        path_parts = [p for p in parsed.path.split('/') if p]
-        path_depth[len(path_parts)] += 1
+        # Check if we've seen this exact content before
+        if content_hash in exact_content_hashes:
+            return True
         
-        # Track URL visit count
-        url_visit_count[url] += 1
+        # Add to seen hashes
+        exact_content_hashes.add(content_hash)
+        
+        return False
         
     except Exception as e:
-        print(f"Error tracking URL pattern for {url}: {e}")
+        print(f"Error checking exact similarity: {e}")
+        return False
+
+def compute_tf(word_counts):
+    """
+    Compute Term Frequency (TF) vector from word counts
+    TF = count(word) / total_words
+    
+    This normalizes word counts by total words in document
+    """
+    total_words = sum(word_counts.values())
+    if total_words == 0:
+        return {}
+    return {word: count / total_words for word, count in word_counts.items()}
+
+def compute_idf(word, total_docs, doc_freq):
+    """
+    Compute Inverse Document Frequency (IDF)
+    IDF = log(total_documents / document_frequency)
+    
+    Uses natural log for computational efficiency
+    """
+    import math
+    if doc_freq == 0:
+        return 0.0
+    # Standard IDF formula: log(N / df)
+    idf_ratio = total_docs / doc_freq
+    # Use log base e for computation
+    return math.log(idf_ratio)
+
+def compute_tfidf_vector(word_counts):
+    """
+    Compute TF-IDF vector for a document
+    TF-IDF = TF * IDF
+    
+    Combines Term Frequency with Inverse Document Frequency
+    to weight important words higher
+    """
+    global total_documents, document_frequencies
+    
+    # Compute TF first
+    tf_vector = compute_tf(word_counts)
+    tfidf_vector = {}
+    
+    for word, tf_value in tf_vector.items():
+        # Get IDF for this word based on how many documents contain it
+        doc_freq = document_frequencies.get(word, 0)
+        idf_value = compute_idf(word, total_documents, doc_freq) if doc_freq > 0 else 0.0
+        
+        # TF-IDF = TF * IDF
+        tfidf_vector[word] = tf_value * idf_value
+    
+    return tfidf_vector
+
+def check_near_similarity(url, word_counts):
+    """
+    Check for near-duplicate pages using TF-IDF and cosine similarity
+    
+    Methodology:
+    1. Compute TF-IDF vector for current document
+    2. Compare with all previous documents using cosine similarity
+    3. If similarity > 90%, mark as near-duplicate
+    
+    Returns True if this page is similar (>90% cosine similarity) to any previously crawled page
+    """
+    global url_to_word_vector, total_documents, document_frequencies
+    
+    try:
+        # Compute TF-IDF vector for THIS document BEFORE updating frequencies
+        tfidf_vector = compute_tfidf_vector(word_counts)
+        
+        # Check cosine similarity with all previous documents
+        for existing_url, existing_vector in url_to_word_vector.items():
+            if existing_url == url:  # Skip itself
+                continue
+            
+            # Compute cosine similarity between vectors
+            similarity = cosine_similarity(tfidf_vector, existing_vector)
+            
+            # If similarity > 90%, consider it a near-duplicate
+            if similarity > 0.90:
+                print(f" Near-duplicate detected (similarity: {similarity:.2%}): {url}")
+                return True
+        
+        # If not a duplicate, add this document to tracking
+        # Update document frequencies for future comparisons
+        unique_words = set(word_counts.keys())
+        for word in unique_words:
+            document_frequencies[word] += 1
+        total_documents += 1
+        
+        # Store the TF-IDF vector for future comparisons
+        url_to_word_vector[url] = tfidf_vector
+        
+        return False
+        
+    except Exception as e:
+        print(f"Error checking near similarity: {e}")
+        return False
+
+# ============================================================================
+# REPORT FUNCTIONS
+# ============================================================================
+
+def update_report(url, content):
+    """
+    Update report tracking with new URL and content
+    """
+    global unique_urls, url_to_word_count, longest_page_url, longest_page_count, subdomain_urls, all_words
+    
+    # Add to unique URLs
+    unique_urls.add(url)
+    
+    # Extract and count words
+    try:
+        soup = BeautifulSoup(content, "html.parser")
+        for script in soup(["script", "style", "nav", "header", "footer"]):
+            script.decompose()
+        text_content = soup.get_text()
+        words = extract_words_from_text(text_content)
+        word_count = len(words)
+        
+        # Track word count
+        url_to_word_count[url] = word_count
+        
+        # Update longest page
+        if word_count > longest_page_count:
+            longest_page_url = url
+            longest_page_count = word_count
+        
+        # Add words to global list (for frequency analysis)
+        all_words.extend(words)
+        
+        # Track subdomain - add this URL to subdomain's set
+        parsed = urlparse(url)
+        subdomain = parsed.netloc.lower()
+        subdomain_urls[subdomain].add(url)
+        
+    except Exception:
+        pass  # Silently fail if extraction fails
+    
+    # Save report periodically (every 50 URLs)
+    if len(unique_urls) % 50 == 0:
+        save_report_json()
+
+def has_similar_content(url, content):
+    """
+    Check if page has similar content to already crawled pages
+    Uses both exact and near-similarity detection
+    
+    Returns True if page should be rejected due to similarity
+    """
+    global url_to_word_vector, document_frequencies, total_documents
+    
+    try:
+        # First check for EXACT duplicates using hash
+        if check_exact_similarity(content):
+            print(f" Exact duplicate detected (hash): {url}")
+            return True
+        
+        # Then check for NEAR-duplicates using TF-IDF + cosine similarity
+        soup = BeautifulSoup(content, "html.parser")
+        for script in soup(["script", "style", "nav", "header", "footer"]):
+            script.decompose()
+        text_content = soup.get_text()
+        words = extract_words_from_text(text_content)
+        
+        # Create word count dictionary for TF-IDF
+        word_counts = Counter(words)
+        
+        # Check near similarity using TF-IDF + cosine similarity
+        if check_near_similarity(url, word_counts):
+            print(f" Near-duplicate detected (TF-IDF + cosine): {url}")
+            return True
+        
+        return False
+        
+    except Exception as e:
+        print(f"Error checking similar content: {e}")
+        return False
+
+def save_report_json(filename="crawl_report.json"):
+    """
+    Save current report data to JSON file
+    """
+    global unique_urls, url_to_word_count, longest_page_url, longest_page_count, subdomain_urls, all_words
+    
+    # Get top 50 most common words
+    word_freq = Counter(all_words)
+    top_50_words = [(word, count) for word, count in word_freq.most_common(50)]
+    
+    # Get subdomains in alphabetical order with counts
+    subdomain_list = [(subdomain, len(urls)) for subdomain, urls in sorted(subdomain_urls.items())]
+    
+    report = {
+        "unique_pages_count": len(unique_urls),
+        "longest_page": {
+            "url": longest_page_url,
+            "word_count": longest_page_count
+        },
+        "top_50_words": top_50_words,
+        "subdomains": subdomain_list
+    }
+    
+    try:
+        with open(filename, 'w') as f:
+            json.dump(report, f, indent=2)
+    except Exception as e:
+        print(f"Error saving report: {e}")
+
+# ============================================================================
+# MAIN SCRAPER FUNCTIONS
+# ============================================================================
 
 def scraper(url, resp):
     """
     Main scraper function with comprehensive trap detection and content analysis
     """
     try:
-        # Check politeness delay
-        check_politeness_delay(url)
-        
         # Check if response is valid
         if resp.status != 200:
-            print(f" Invalid response status {resp.status} for {url}")
             return []
         
-        """if is_dead_url(resp):
+        # Check for dead URLs
+        if is_dead_url(resp):
             print(f" Dead URL detected: {url}")
-            return [] """
+            return []
         
         # Get content for analysis
         content = resp.raw_response.content if resp.raw_response else None
@@ -356,13 +573,12 @@ def scraper(url, resp):
             print(f" Low textual content detected: {url}")
             return []
         
-        # Check for similar pages with no info
-        if is_similar_page_with_no_info(url, content):
-            print(f" Similar page with no info detected: {url}")
+        # Check for similar content (exact and near-duplicates using TF-IDF + cosine similarity)
+        if has_similar_content(url, content):
             return []
         
-        # Track URL pattern for trap detection
-        track_url_pattern(url)
+        # Update report tracking with this URL
+        update_report(url, content)
         
         # Extract links from the page
         links = extract_next_links(url, resp)
@@ -375,18 +591,10 @@ def scraper(url, resp):
             
             # Check for infinite traps
             if is_infinite_trap(link):
-                print(f" Infinite trap detected: {link}")
-                continue
-            
-            # Check URL visit frequency (avoid crawling same URL too many times)
-            if url_visit_count[link] > 2:
-                print(f" URL visited too many times: {link}")
                 continue
             
             valid_links.append(link)
-            crawled_urls.append(link)
         
-        print(f" Successfully processed {url} - found {len(valid_links)} valid links")
         return valid_links
         
     except Exception as e:
@@ -469,6 +677,23 @@ def is_valid(url):
         if any(s in path for s in ["/calendar", "/feed", "/tag/"]):
             return False
         
+        # Check for known crawler traps from community
+        if any(trap in path.lower() for trap in [
+            "/events/",  # isg.ics.uci.edu/events/*
+            "ical",      # Calendar traps
+            "tribe",     # Tribe-related traps
+            "/pix/"      # ~eppstein/pix (extensive photos)
+        ]):
+            return False
+        
+        # Check domain for known trap subdomains
+        if any(trap_domain in domain.lower() for trap_domain in [
+            "wics.ics",  # wics.ics subdomain
+            "ngs.ics",
+            "grape.ics"  # grape.ics subdomain
+        ]):
+            return False
+        
         # Check for unwanted query parameters
         query = parsed.query.lower()
         if any(p in query for p in ["replytocom=", "format=amp"]):
@@ -476,9 +701,9 @@ def is_valid(url):
         
         return True
 
-    except TypeError:
-        print ("TypeError for ", parsed)
-        raise
+    except (TypeError, ValueError) as e:
+        print(f"Error parsing URL {url}: {e}")
+        return False
 
 def get_all_crawled_urls():
     """
