@@ -1,10 +1,25 @@
+import os
 import re
 import time
 import hashlib
-from urllib.parse import urlparse, urljoin, urldefrag, parse_qs
-from bs4 import BeautifulSoup
+from urllib.parse import urlparse, urljoin, urldefrag, parse_qs, urlunparse
+from bs4 import BeautifulSoup, Comment
 import configparser
 from collections import defaultdict, Counter
+
+import logging
+
+# Configure once, very early (top of launch.py)
+fmt = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+ch = logging.StreamHandler()
+ch.setLevel(logging.INFO)
+
+fh = logging.FileHandler("scraper.log", encoding="utf-8")
+fh.setLevel(logging.DEBUG)
+
+logging.basicConfig(level=logging.DEBUG, format=fmt, handlers=[ch, fh], force=True)
+
 
 # Global tracking for crawler trap detection and politeness
 crawled_urls = []
@@ -15,8 +30,12 @@ session_tracker = defaultdict(set)  # Track session-like parameters
 domain_last_crawl = defaultdict(float)  # Track last crawl time per domain
 page_content_hashes = defaultdict(int)  # Track content similarity
 url_visit_count = defaultdict(int)  # Track URL visit frequency
+
 stop_words = set()   # Used for finding most frequent words
 word_counter = Counter()    # Tracks word frequency across all pages
+
+LONGEST_PAGE = {"url": None, "count": 0}   #Track the longest page in terms of the number of words
+SEEN = set() ##global set for already seen url
 
 def get_allowed_domains():
     """
@@ -110,7 +129,8 @@ def is_infinite_trap(url):
         # Calendar/date-based traps
         if re.search(r'/(\d{4})/(\d{1,2})/(\d{1,2})', path):
             return True
-        
+        if re.search(r'/(/day/\d{4})/(\d{1,2})/(\d{1,2})', path):
+            return True
         # Pagination traps (excessive page numbers)
         if re.search(r'/page/\d{3,}', path):
             return True
@@ -328,64 +348,6 @@ def track_url_pattern(url):
     except Exception as e:
         print(f"Error tracking URL pattern for {url}: {e}")
 
-def load_stopwords(filename="stopwords.txt"):
-    """
-    Load stopwords from stored file
-    Used for : 50 most common words
-    """
-    stopwords = set()
-    try:
-        with open(filename, "r", encoding="utf-8") as f:
-            for line in f:
-                word = line.strip().lower()
-                if word:
-                    stopwords.add(word)
-    except FileNotFoundError:
-        print(f"Warning: stopwords file '{filename}' not found.")
-    return stopwords
-
-def count_page_words_frequency(resp):
-    """
-    Extracts words from the passed URL and stores in word counter
-    Ignores stopwords, HTML markup and only counts letters [a-z] 
-    to be considerred a word
-    """
-    global stop_words
-    stop_words = load_stopwords()
-    try:
-        soup = BeautifulSoup(resp.raw_response.content, "html.parser")
-
-        # Removes unnecessary tags 
-        for tag in soup(["script", "style", "nav", "header", "footer"]):
-            tag.decompose()
-        # Gets only the readable text
-        text = soup.get_text(separator=" ")
-        text = text.lower()
-
-        # filters out # or symbols, only letters a-z
-        words = re.findall(r"[a-z]+", text)
-
-        # goes through found words and if not a stop word adds it to global counter with +1 to its frequency
-        for word in words:
-            if word not in stop_words:
-                word_counter[word] += 1
-
-    except Exception as e:
-        print(f"Error counting words: {e}")
-
-def save_top_words_to_file(filename="top_words.txt", n=50):
-    """
-    Save the n most common words to text file.
-    """
-    try:
-        with open(filename, "w", encoding="utf-8") as f:
-            f.write(f"Top {n} Most Common Words (excluding stopwords)\n")
-            f.write("=" * 50 + "\n")
-            for word, count in word_counter.most_common(n):
-                f.write(f"{word:<20} {count}\n")
-    except Exception as e:
-        print(f"Error saving top words: {e}")
-
 def scraper(url, resp):
     """
     Main scraper function with comprehensive trap detection and content analysis
@@ -455,6 +417,58 @@ def scraper(url, resp):
         print(f" Error in scraper for {url}: {e}")
         return []
 
+def load_stopwords(filename="stopwords.txt"):
+    """
+    Load stopwords from stored file
+    Used for : 50 most common words
+    """
+    stopwords = set()
+    try:
+        with open(filename, "r", encoding="utf-8") as f:
+            for line in f:
+                word = line.strip().lower()
+                if word:
+                    stopwords.add(word)
+    except FileNotFoundError:
+        print(f"Warning: stopwords file '{filename}' not found.")
+    return stopwords
+
+def visible_text_from_soup(soup: BeautifulSoup) -> str:
+    
+    # Drop non-content tags
+    # Remove JS/CSS/inert markup, Cuts menus/footers
+    for t in soup(["script","style","noscript","template","svg","canvas", "nav", "header", "footer"]):
+        t.decompose()
+
+    # drop comments
+    for c in soup.find_all(string=lambda s: isinstance(s, Comment)):
+        c.extract()
+
+    # drop hidden elements (non-visible)
+    for el in soup.select('[hidden], [aria-hidden="true"], [style*="display:none"], [style*="visibility:hidden"]'):
+        el.decompose()
+
+    # Get visible text
+    text = soup.get_text(" ", strip=True)
+    text = text.lower()
+    return text
+
+def count_words(text: str) -> int:
+    stop_words = load_stopwords()
+    words = re.findall(r"[A-Za-z0-9]+", text)
+    # goes through found words and if not a stop word adds it to global counter with +1 to its frequency
+    for word in words:
+        if word not in stop_words:
+            word_counter[word] += 1
+    return len(words)
+
+def update_longest(url: str, count: int) -> None:
+    if count > LONGEST_PAGE["count"]:
+        LONGEST_PAGE["url"] = url
+        LONGEST_PAGE["count"] = count
+        logging.info(f"longest page: {url}") 
+        logging.info(f"longest count:  {count}")
+
 def extract_next_links(url, resp):
     # Implementation required.
     # url: the URL that was used to get the page
@@ -476,6 +490,11 @@ def extract_next_links(url, resp):
         # Parse HTML content
         soup = BeautifulSoup(resp.raw_response.content, "html.parser")
         
+        # count word for the page
+        visible_text = visible_text_from_soup(soup)
+        word_count = count_words(visible_text)
+        update_longest(url, word_count)
+
         # Find all anchor tags with href attributes
         for a in soup.find_all("a", href=True):
             href = a.get("href")
@@ -499,10 +518,38 @@ def extract_next_links(url, resp):
     # Remove duplicates while preserving order
     return list(dict.fromkeys(links))
 
+# ALLOWED_DOMAIN = ("ics.uci.edu", "cs.uci.edu", "informatics.uci.edu", "stat.uci.edu")
+
+# def domain_range(host: str) -> bool:
+#     if not host:
+#         return False
+#     host = host.lower().rstrip(".")
+    
+#     for d in ALLOWED_DOMAIN:
+#         #if any domain or subdomain match return true
+#         if host == d or host.endswith("." + d):
+#             return True
+#     return False
+
+def canonicalize_trailing_slash(u: str) -> str:
+    p = urlparse(u)
+    path = p.path or "/"
+    if path != "/" and path.endswith("/"):
+        #remove the trailing slash
+        path = path[:-1]
+    p = p._replace(path=path)
+    return urlunparse(p)
+
 def is_valid(url):
     # Decide whether to crawl this url or not. 
     # If you decide to crawl it, return True; otherwise return False.
     # There are already some conditions that return False.
+    
+    #Canonicalize the url by removing the trailing slash
+    # to make links https://ics.uci.edu/accessibility-statement/
+    # and https://ics.uci.edu/accessibility-statement become the same link
+    url = canonicalize_trailing_slash(url)
+    
     try:
         parsed = urlparse(url)
         if parsed.scheme not in set(["http", "https"]):
@@ -525,6 +572,7 @@ def is_valid(url):
             + r"|data|dat|exe|bz2|tar|msi|bin|7z|psd|dmg|iso"
             + r"|epub|dll|cnf|tgz|sha1"
             + r"|thmx|mso|arff|rtf|jar|csv"
+            + r"|docs"
             + r"|rm|smil|wmv|swf|wma|zip|rar|gz)$", path):
             return False
         
@@ -534,9 +582,19 @@ def is_valid(url):
         
         # Check for unwanted query parameters
         query = parsed.query.lower()
-        if any(p in query for p in ["replytocom=", "format=amp"]):
+        if any(p in query for p in ["replytocom=", "format=amp", "ical=1"]):
             return False
         
+        if "/events/" in path and ("/day/" in path or "/month/" in path):
+            return False
+        # # exclude the url that end with "ical=1" which is calendar   
+        # if parsed.query.lower() == "ical=1":
+        #     return False
+        if url in SEEN:
+            return False
+        else:
+            SEEN.add(url)
+        logging.info(f"SEEN url: {url}")
         return True
 
     except TypeError:
@@ -616,6 +674,34 @@ def save_unique_urls_to_file(filename="unique_crawled_urls.txt"):
     except Exception as e:
         print(f" Error saving unique URLs to file: {e}")
 
+def save_seen_url(filename = "unique_seen_url.txt"):
+    # total_count = None
+    # snapshot = sorted(SEEN, key=lambda u: (lambda p: (p.netloc, p.path, p.query))(urlsplit(u)))
+    # total = total_count if total_count is not None else len(snapshot)
+    with open(filename, 'w', encoding='utf-8') as f:
+        f.write(f"UNIQUE CRAWLED URLs ({len(SEEN)} unique out of {len(crawled_urls)} total)\n")
+        f.write("="*60 + "\n")
+        for i, url in enumerate(SEEN, 1):
+            f.write(f"{i:3d}. {url}\n")
+        f.write("="*60 + "\n")
+    print(f" Unique crawled URLs saved to: {filename}")
+
+def save_top_words_to_file(filename="top_words.txt", n=50):
+    """
+    Save the n most common words to text file.
+    """
+    try:
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(f"The longest page is {LONGEST_PAGE['url']}\n")
+            f.write(f"The longest page has {LONGEST_PAGE['count']} words\n")
+            f.write(f"Top {n} Most Common Words (excluding stopwords)\n")
+            f.write("=" * 50 + "\n")
+            for word, count in word_counter.most_common(n):
+                f.write(f"{word:<20} {count}\n")
+    except Exception as e:
+        print(f"Error saving top words: {e}")
+
+
 def save_crawl_results():
     """
     Save both all URLs and unique URLs to text files
@@ -623,8 +709,10 @@ def save_crawl_results():
     print("\n Saving crawl results to files...")
     save_all_urls_to_file()
     save_unique_urls_to_file()
+    save_seen_url()
     save_top_words_to_file("top_words.txt", 50)
     print(" Crawl results saved successfully!")
+
 
 def reset_all_tracking():
     """
