@@ -10,10 +10,6 @@ from bs4 import BeautifulSoup
 import configparser
 from collections import defaultdict, Counter
 
-# ============================================================================
-# GLOBAL STATE FOR REPORT TRACKING
-# ============================================================================
-
 unique_urls = set()  # Unique URLs crawled
 url_to_word_count = {}  # Word count per URL
 all_words = []  # All words from all pages for frequency analysis
@@ -97,8 +93,8 @@ def is_infinite_trap(url):
                    ['timestamp', 'time', 'random', 'cache', 'nocache', 'refresh']):
                 return True
         
-        # Check for excessive query parameters (potential trap)
-        if len(query_params_list) > 5:
+        # Check for excessive query parameters (potential trap) - relaxed
+        if len(query_params_list) > 15:  # Increased from 5 to 15
             return True
         
         # Check for URL patterns that might be traps
@@ -108,23 +104,23 @@ def is_infinite_trap(url):
         if re.search(r'/(\d{4})/(\d{1,2})/(\d{1,2})', path):
             return True
         
-        # Pagination traps (excessive page numbers)
-        if re.search(r'/page/\d{3,}', path):
+        # Pagination traps (excessive page numbers) - only block really deep pagination
+        if re.search(r'/page/\d{4,}', path):  # Increased from 3+ to 4+
             return True
         
         # Search result traps
-        if '/search' in path and len(query_params_list) > 3:
+        if '/search' in path and len(query_params_list) > 10:  # Increased from 3 to 10
             return True
         
-        # Check for excessive path depth
+        # Check for excessive path depth - relaxed
         path_parts = [p for p in path.split('/') if p]
-        if len(path_parts) > 6:  # Too deep
+        if len(path_parts) > 10:  # Increased from 6 to 10
             return True
         
-        # Check for suspicious file extensions in path
-        suspicious_extensions = ['.php', '.asp', '.jsp', '.cgi']
-        if any(path.endswith(ext) for ext in suspicious_extensions):
-            return True
+        # Don't block all PHP/JSP files - only block if clearly dynamic
+        # suspicious_extensions = ['.php', '.asp', '.jsp', '.cgi']
+        # if any(path.endswith(ext) for ext in suspicious_extensions):
+        #     return True
         
         # Check for URL shorteners or redirects
         redirect_domains = ['bit.ly', 'tinyurl.com', 'goo.gl', 't.co', 'ow.ly']
@@ -146,42 +142,10 @@ def is_infinite_trap(url):
 # CONTENT QUALITY DETECTION FUNCTIONS
 # ============================================================================
 
-def is_dead_url(resp):
-    """
-    Detect dead URLs that return 200 but no useful data
-    """
-    try:
-        if resp.status != 200:
-            return True
-        
-        if not resp.raw_response or not resp.raw_response.content:
-            return True
-        
-        content = resp.raw_response.content
-        
-        # Check for very small content
-        if len(content) < 100:  # Less than 100 bytes
-            return True
-        
-        # Check for error pages that return 200
-        content_str = content.decode('utf-8', errors='ignore').lower()
-        error_indicators = [
-            'page not found', '404', 'not found', 'error', 'oops',
-            'something went wrong', 'access denied', 'forbidden'
-        ]
-        
-        if any(indicator in content_str for indicator in error_indicators):
-            return True
-        
-        return False
-        
-    except Exception as e:
-        print(f"Error checking dead URL: {e}")
-        return True
-
 def is_large_file_with_low_value(url, content):
     """
     Detect very large files with low information value
+    VERY RELAXED for maximum coverage
     """
     try:
         if not content:
@@ -189,28 +153,22 @@ def is_large_file_with_low_value(url, content):
         
         content_size = len(content)
         
-        # Check file size (larger than 1MB)
-        if content_size > 1024 * 1024:  # 1MB
+        # Only check for extremely large files (larger than 10MB)
+        if content_size > 10 * 1024 * 1024:  # 10MB (increased from 1MB)
             # Check if it's a binary file or has low text content
             try:
                 content_str = content.decode('utf-8', errors='ignore')
                 text_ratio = len(content_str) / content_size
                 
-                # If less than 10% is readable text, it's likely a binary file
-                if text_ratio < 0.1:
+                # If less than 1% is readable text, it's likely a binary file
+                if text_ratio < 0.01:  # Very relaxed from 0.1 to 0.01
                     return True
                     
             except:
                 return True
         
-        # Check for very large HTML files (more than 500KB)
-        if content_size > 500 * 1024:  # 500KB
-            soup = BeautifulSoup(content, "html.parser")
-            text_content = soup.get_text()
-            
-            # If text content is less than 20% of total size, low value
-            if len(text_content) / content_size < 0.2:
-                return True
+        # Don't check HTML files for low value - too aggressive
+        # This was blocking too many valid pages
         
         return False
         
@@ -221,7 +179,7 @@ def is_large_file_with_low_value(url, content):
 def has_high_textual_content(content):
     """
     Check if page has high textual information content
-    Combines low info detection and high quality checks
+    VERY RELAXED for maximum coverage
     """
     try:
         if not content:
@@ -236,18 +194,9 @@ def has_high_textual_content(content):
         # Get text content
         text_content = soup.get_text()
         
-        # Check for minimum text content (< 200 chars is low info)
-        if len(text_content.strip()) < 200:
-            return False
-        
-        # Simple word count check (words of 3+ characters)
+        # Very minimal word count check (words of 3+ characters)
         words = re.findall(r'\b[a-zA-Z]{3,}\b', text_content.lower())
-        if len(words) < 100:  # Need at least 100 words
-            return False
-        
-        # Look for content-rich elements
-        content_elements = soup.find_all(['article', 'main', 'div', 'section', 'p'])
-        if len(content_elements) < 3:  # Need at least some structure
+        if len(words) < 10:  # Need at least 10 words (very relaxed)
             return False
         
         return True
@@ -554,12 +503,7 @@ def scraper(url, resp):
         # Check if response is valid
         if resp.status != 200:
             return []
-        
-        # Check for dead URLs
-        if is_dead_url(resp):
-            print(f" Dead URL detected: {url}")
-            return []
-        
+
         # Get content for analysis
         content = resp.raw_response.content if resp.raw_response else None
         
@@ -574,8 +518,9 @@ def scraper(url, resp):
             return []
         
         # Check for similar content (exact and near-duplicates using TF-IDF + cosine similarity)
-        if has_similar_content(url, content):
-            return []
+        # NOTE: Near-duplicate detection is very aggressive and may stop crawl early
+        # if has_similar_content(url, content):
+        #     return []
         
         # Update report tracking with this URL
         update_report(url, content)
@@ -677,20 +622,21 @@ def is_valid(url):
         if any(s in path for s in ["/calendar", "/feed", "/tag/"]):
             return False
         
-        # Check for known crawler traps from community
+        # Check for known crawler traps from community - more specific
         if any(trap in path.lower() for trap in [
-            "/events/",  # isg.ics.uci.edu/events/*
-            "ical",      # Calendar traps
-            "tribe",     # Tribe-related traps
-            "/pix/"      # ~eppstein/pix (extensive photos)
+            "/events/",     # isg.ics.uci.edu/events/* (calendar)
+            "/ical/",       # Calendar traps - more specific (not just "ical")
+            "tribe-",       # Tribe-related traps - more specific
+            "/pix/",        # ~eppstein/pix (extensive photos)
+            "doku.php"      # doku.php traps
         ]):
             return False
         
         # Check domain for known trap subdomains
         if any(trap_domain in domain.lower() for trap_domain in [
-            "wics.ics",  # wics.ics subdomain
-            "ngs.ics",
-            "grape.ics"  # grape.ics subdomain
+            "grape.ics",     # grape.ics subdomain (infinite trap)
+            "gitlab.ics",    # gitlab.ics.uci.edu (every commit is a separate page)
+            "fano.ics"       # fano.ics.uci.edu/ca/rules/
         ]):
             return False
         
