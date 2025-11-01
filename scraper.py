@@ -399,21 +399,6 @@ def scraper(url, resp):
             print(f" Invalid response status {resp.status} for {url}")
             return []
         
-        # --- START FIX ---
-        # Check Content-Type *before* processing.
-        # We only want to parse text/html.
-        try:
-            # Note: The exact way to get headers depends on your 'resp' object.
-            # This assumes 'resp.raw_response.headers' exists.
-            content_type = resp.raw_response.headers.get('Content-Type', '').lower()
-        except AttributeError:
-            content_type = '' # Fallback if headers are not where expected
-            print(f" Warning: Could not determine Content-Type for {url}")
-
-        if 'text/html' not in content_type:
-            print(f" Skipping non-HTML content ({content_type}) for {url}")
-            return []
-        # --- END FIX ---
         """if is_dead_url(resp):
             print(f" Dead URL detected: {url}")
             return [] """
