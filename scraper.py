@@ -35,7 +35,7 @@ stop_words = set()   # Used for finding most frequent words
 word_counter = Counter()    # Tracks word frequency across all pages
 
 LONGEST_PAGE = {"url": None, "count": 0}   #Track the longest page in terms of the number of words
-
+SEEN = set() ##global set for already seen url
 
 def get_allowed_domains():
     """
@@ -448,6 +448,7 @@ def visible_text_from_soup(soup: BeautifulSoup) -> str:
 
     # Get visible text
     text = soup.get_text(" ", strip=True)
+    text = text.lower()
     return text
 
 def count_words(text: str) -> int:
@@ -514,20 +515,18 @@ def extract_next_links(url, resp):
     # Remove duplicates while preserving order
     return list(dict.fromkeys(links))
 
-#global set for already seen url
-SEEN = set()
-ALLOWED_DOMAIN = ("ics.uci.edu", "cs.uci.edu", "informatics.uci.edu", "stat.uci.edu")
+# ALLOWED_DOMAIN = ("ics.uci.edu", "cs.uci.edu", "informatics.uci.edu", "stat.uci.edu")
 
-def domain_range(host: str) -> bool:
-    if not host:
-        return False
-    host = host.lower().rstrip(".")
+# def domain_range(host: str) -> bool:
+#     if not host:
+#         return False
+#     host = host.lower().rstrip(".")
     
-    for d in ALLOWED_DOMAIN:
-        #if any domain or subdomain match return true
-        if host == d or host.endswith("." + d):
-            return True
-    return False
+#     for d in ALLOWED_DOMAIN:
+#         #if any domain or subdomain match return true
+#         if host == d or host.endswith("." + d):
+#             return True
+#     return False
 
 def canonicalize_trailing_slash(u: str) -> str:
     p = urlparse(u)
