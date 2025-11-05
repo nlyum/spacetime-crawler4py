@@ -62,6 +62,7 @@ himself
 his
 how
 how's
+html
 i
 i'd
 i'll
@@ -95,7 +96,7 @@ or
 other
 ought
 our
-ours 	
+ours
 ourselves
 out
 over
